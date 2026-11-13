@@ -37,16 +37,31 @@ def test_farm_simulation():
     assert r.status_code == 200, r.text
     data = r.json()
     assert len(data["dates"]) == 365
-    assert len(data["plots"]) == 18
-    assert {"wheat", "rice", "cotton", "maize", "potato", "berseem"} <= {p["crop"] for p in data["plots"]}
+    assert len(data["fields"]) == 4
+    # default fields: cotton/rice/maize/mung then wheat/mustard/chickpea, wheat simulated once
+    assert {p["crop"] for p in data["plots"]} == {"cotton", "rice", "maize", "mung_bean", "wheat", "mustard", "chickpea"}
+    assert set(data["shocks"]) == {"drought", "heatwave", "flood"}
     # on a rain-fed farm a drought should cut most harvests
     down = sum(p["scenario"]["summary"]["yield_t_ha"] < p["baseline"]["summary"]["yield_t_ha"] for p in data["plots"])
-    assert down >= 12
+    assert down >= 5
     for p in data["plots"]:
         assert p["insights"][0]["code"] == "yield_change"
         # every season must end inside the May-April farm year
         assert p["harvest_date"] <= "2025-04-30"
 
+
+def test_farm_custom_fields():
+    body = {"year": 2024, "fields": [{"kharif": "rice", "rabi": "potato", "acres": 5}]}
+    data = client.post("/api/farm/simulate", json=body).json()
+    assert [p["crop"] for p in data["plots"]] == ["rice", "potato"]
+    assert data["fields"][0]["acres"] == 5
+
+
+def test_farm_field_rules():
+    too_many = {"fields": [{"kharif": "rice"}] * 5}
+    assert client.post("/api/farm/simulate", json=too_many).status_code == 422
+    wrong_season = {"year": 2024, "fields": [{"kharif": "wheat"}]}
+    assert client.post("/api/farm/simulate", json=wrong_season).status_code == 422
 
 def test_farm_year_not_finished():
     r = client.post("/api/farm/simulate", json={"year": 2030})

@@ -1,4 +1,4 @@
-"""Virtual farm endpoints: run the four-plot simulation under a scenario."""
+"""Virtual farm endpoints: simulate a farmer's own fields (up to four) under a scenario."""
 import datetime as dt
 from typing import Literal
 
@@ -13,6 +13,24 @@ from .simulation.scenarios import apply_scenario
 from .simulation.weather import get_farm_weather
 
 router = APIRouter(prefix="/api/farm")
+CropKey = Literal[tuple(CROPS)]  # type: ignore[valid-type]
+SHOCKS = ("drought", "heatwave", "flood")
+
+
+class FieldPlan(BaseModel):
+    """One field: a summer (kharif) crop, then a winter (rabi) crop. Either may be empty."""
+    name: str = Field("", max_length=40)
+    kharif: CropKey | None = None
+    rabi: CropKey | None = None
+    acres: float = Field(2.0, gt=0, le=500)
+
+
+DEFAULT_FIELDS = [
+    FieldPlan(kharif="cotton", rabi="wheat"),
+    FieldPlan(kharif="rice", rabi="wheat"),
+    FieldPlan(kharif="maize", rabi="mustard"),
+    FieldPlan(kharif="mung_bean", rabi="chickpea"),
+]
 MODEL_NAME = "Simplified AquaCrop-style model (Phase 1)"
 
 
@@ -26,6 +44,8 @@ class FarmRequest(BaseModel):
     irrigation: Literal["rainfed", "deficit", "full"] = "full"
     clay: float | None = Field(None, ge=0, le=90)
     sand: float | None = Field(None, ge=0, le=95)
+    fields: list[FieldPlan] = Field(default_factory=lambda: [f.model_copy() for f in DEFAULT_FIELDS],
+                                    min_length=1, max_length=4)
 
 
 def _arr(a, nd=3):
@@ -52,17 +72,34 @@ def simulate(req: FarmRequest) -> dict:
         soil, soil_source = fetch_soilgrids(req.lat, req.lon)
     soil_class = texture_class(soil.get("clay", 25), soil.get("sand", 40))
 
+    for f in req.fields:
+        if f.kharif and CROPS[f.kharif].season_group != "kharif":
+            raise HTTPException(422, f"{f.kharif} is not a kharif crop")
+        if f.rabi and CROPS[f.rabi].season_group != "rabi":
+            raise HTTPException(422, f"{f.rabi} is not a rabi crop")
+    # Each crop is simulated once: the same crop on the same soil and weather grows the same.
+    keys = list(dict.fromkeys(k for f in req.fields for k in (f.kharif, f.rabi) if k))
+    if not keys:
+        raise HTTPException(422, "Choose at least one crop.")
+
     weather = get_farm_weather(req.lat, req.lon, req.year)
     base_w = apply_scenario(weather, "normal")
     scen_w = apply_scenario(weather, req.scenario, req.temp_offset, req.rain_pct)
-    base = simulate_farm(base_w, req.year, soil_class, req.irrigation)
-    scen = simulate_farm(scen_w, req.year, soil_class, req.irrigation)
+    base = simulate_farm(base_w, req.year, soil_class, req.irrigation, keys)
+    scen = simulate_farm(scen_w, req.year, soil_class, req.irrigation, keys)
     # Best case for this field: normal weather and full irrigation. Gives farmers a
     # yardstick ("you get 60% of what this crop can produce here").
-    best = simulate_farm(base_w, req.year, soil_class, "full")
+    best = simulate_farm(base_w, req.year, soil_class, "full", keys)
+    # The same farm under every disaster, for the "what could hit you" comparison.
+    shocks = {}
+    for name in SHOCKS:
+        res = scen if name == req.scenario else simulate_farm(
+            apply_scenario(weather, name), req.year, soil_class, req.irrigation, keys)
+        shocks[name] = {k: res[k]["summary"]["yield_t_ha"] for k in keys}
 
     plots = []
-    for key, crop in CROPS.items():
+    for key in keys:
+        crop = CROPS[key]
         s, b = scen[key], base[key]
         plots.append({
             "crop": key, "sow_date": s["sow_date"], "harvest_date": s["harvest_date"],
@@ -93,5 +130,7 @@ def simulate(req: FarmRequest) -> dict:
         "soil": {"class": soil_class, "source": soil_source},
         "scenario": req.scenario, "irrigation": req.irrigation,
         "model": MODEL_NAME,
+        "fields": [f.model_dump() for f in req.fields],
         "plots": plots,
+        "shocks": shocks,
     }
