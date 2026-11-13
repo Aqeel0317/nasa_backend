@@ -17,8 +17,12 @@ from __future__ import annotations
 
 import calendar
 import datetime as dt
+import hashlib
+import json
 import logging
 import os
+import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -33,10 +37,37 @@ MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
 FILL = -999.0
 
 
-def _get(url: str, params: dict | None = None, headers: dict | None = None) -> Any:
-    r = requests.get(url, params=params, headers=headers, timeout=TIMEOUT)
+# Responses are kept on disk so they survive restarts. On Azure App Service /home
+# is persistent storage shared by all workers; locally a .cache folder is used.
+CACHE_DIR = Path(os.getenv("CACHE_DIR") or ("/home/cache" if os.getenv("WEBSITE_SITE_NAME") else ".cache"))
+DISK_TTL = int(os.getenv("DISK_CACHE_SECONDS", str(30 * 86400)))
+
+
+def _get(url: str, params: Any = None, headers: dict | None = None, ttl: int | None = None,
+         timeout: float | None = None) -> Any:
+    """GET JSON, served from the disk cache when a fresh copy exists.
+    Past weather and soil do not change, so the default lifetime is long."""
+    ttl = DISK_TTL if ttl is None else ttl
+    key = hashlib.sha1(json.dumps([url, params], sort_keys=True, default=str).encode()).hexdigest()
+    path = CACHE_DIR / f"{key}.json"
+    if ttl > 0:
+        try:
+            if time.time() - path.stat().st_mtime < ttl:
+                return json.loads(path.read_text("utf-8"))
+        except (OSError, ValueError):
+            pass
+    r = requests.get(url, params=params, headers=headers, timeout=timeout or TIMEOUT)
     r.raise_for_status()
-    return r.json()
+    js = r.json()
+    if ttl > 0:
+        try:
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(js), "utf-8")
+            tmp.replace(path)
+        except OSError as e:
+            log.warning("could not write cache: %s", e)
+    return js
 
 
 # --------------------------------------------------------------------------
@@ -167,7 +198,8 @@ def fetch_soilgrids(lat: float, lon: float) -> tuple[dict, str]:
     params += [("property", p) for p in SOIL_PROPS]
     params += [("depth", d) for d in DEPTHS]
     try:
-        js = _get(SOILGRIDS, params=params)
+        # SoilGrids is often slow; give up quickly and use typical values instead.
+        js = _get(SOILGRIDS, params=params, timeout=12)
         out = {}
         for layer in js["properties"]["layers"]:
             factor = layer["unit_measure"].get("d_factor", 1) or 1

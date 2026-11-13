@@ -66,3 +66,11 @@ def test_farm_field_rules():
 def test_farm_year_not_finished():
     r = client.post("/api/farm/simulate", json={"year": 2030})
     assert r.status_code == 422
+
+
+def test_live_feed_shape():
+    # Works with or without network: the shape is always the same.
+    data = client.get("/api/live", params={"lat": 31.42, "lon": 73.08}).json()
+    assert {"weather", "events", "fetched_at"} <= set(data)
+    assert isinstance(data["weather"]["days"], list)
+    assert isinstance(data["events"], list)
