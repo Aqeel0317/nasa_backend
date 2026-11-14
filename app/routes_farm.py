@@ -137,6 +137,9 @@ def _simulate(req: FarmRequest) -> dict:
     if req.scenario in SHOCKS:      # the scenario on screen obeys the same rule
         for k in keys:
             scen[k]["summary"] = {**scen[k]["summary"], "yield_t_ha": shocks[req.scenario][k]}
+    elif req.scenario == "custom" and req.rain_pct > 100:   # a wetter-than-normal custom year: no windfall either
+        for k in keys:
+            scen[k]["summary"] = {**scen[k]["summary"], "yield_t_ha": capped(scen, k)}
 
     plots = []
     for key in keys:
