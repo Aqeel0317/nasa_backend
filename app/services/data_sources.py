@@ -411,9 +411,20 @@ def fetch_modis_ndvi(lat: float, lon: float, n_dates: int = 46) -> tuple[dict, s
 
 def summarize_ndvi(series: list[tuple[str, float]]) -> dict:
     vals = np.array([v for _, v in series])
-    # Count green-up peaks (each ~= one crop cycle)
-    peaks = [i for i in range(1, len(vals) - 1)
-             if vals[i] >= vals[i - 1] and vals[i] > vals[i + 1] and vals[i] > 0.4]
+    # Count green-up peaks (each ~= one crop cycle): on a lightly smoothed curve, peaks
+    # above 0.4 that rise clearly above the dip before them and are at least ~80 days
+    # apart, so a wobble between two images is not counted as another crop.
+    sm = np.convolve(np.r_[vals[:1], vals, vals[-1:]], np.ones(3) / 3, mode="valid") if len(vals) >= 3 else vals
+    peaks, low = [], float(sm[0]) if len(sm) else 0.0
+    for i in range(1, len(sm) - 1):
+        low = min(low, float(sm[i]))
+        if sm[i] >= sm[i - 1] and sm[i] > sm[i + 1] and sm[i] > 0.4 and sm[i] - low >= 0.08:
+            if peaks and i - peaks[-1] < 5:
+                if sm[i] > sm[peaks[-1]]:
+                    peaks[-1] = i
+            else:
+                peaks.append(i)
+            low = float(sm[i])
     span_years = max(len(vals) * 16 / 365, 0.5)
     return {
         "series": series,
