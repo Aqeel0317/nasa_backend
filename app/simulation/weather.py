@@ -9,6 +9,7 @@ which needs only temperature and latitude.
 from __future__ import annotations
 
 import calendar
+import zlib
 import datetime as dt
 import logging
 import math
@@ -212,6 +213,27 @@ def _normals_fallback(lat, lon, dates) -> dict:
     return {"tmax": tmean + 6.5, "tmin": tmean - 6.5, "rain": rain_month / days_in}
 
 
+def _texture(normal, lat, lon, year) -> dict:
+    """Averaged normals are 'perfect' weather: light rain every day and no hot or cold
+    spells, so crops grown on them out-yield any real year. Give them the texture of a
+    real season (same means): warm and cool spells lasting several days, and the rain
+    gathered into showers of about 10 mm. Seeded by place and year, so it is stable."""
+    seed = zlib.crc32(f"{round(lat, 2)},{round(lon, 2)},{year}".encode())
+    rng = np.random.default_rng(seed)
+    n = len(normal["tmax"])
+    spell = np.zeros(n)
+    for i in range(1, n):                       # AR(1): spells of ~5 days
+        spell[i] = 0.8 * spell[i - 1] + rng.normal(0, 1.5)
+    tmax = normal["tmax"] + spell + rng.normal(0, 0.8, n)
+    tmin = normal["tmin"] + 0.7 * spell + rng.normal(0, 0.8, n)
+    rain, acc = np.zeros(n), 0.0
+    for i, r in enumerate(normal["rain"]):
+        acc += max(0.0, float(r))
+        if acc >= 10 and rng.random() < 0.5:
+            rain[i], acc = acc, 0.0
+    return {"tmax": tmax, "tmin": np.minimum(tmin, tmax - 2), "rain": rain}
+
+
 def _current_season(lat, lon, dates, today):
     n = len(dates)
     try:
@@ -219,6 +241,7 @@ def _current_season(lat, lon, dates, today):
     except Exception as e:  # noqa: BLE001
         log.warning("season: daily normals unavailable, using climatology: %s", e)
         normal, normal_src = _normals_fallback(lat, lon, dates), "NASA POWER climate normals"
+    normal = _texture(normal, lat, lon, dates[0].year)
     tmax, tmin, rain = normal["tmax"].copy(), normal["tmin"].copy(), normal["rain"].copy()
     observed_until = forecast_until = None
     parts = []

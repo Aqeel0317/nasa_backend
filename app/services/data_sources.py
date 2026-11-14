@@ -79,7 +79,7 @@ POWER_BASE = "https://power.larc.nasa.gov/api/temporal"
 def fetch_power_climatology(lat: float, lon: float) -> tuple[dict, str]:
     """Monthly normals: temperature, rainfall, humidity, solar, root-zone wetness."""
     params = {
-        "parameters": "T2M,T2M_MAX,T2M_MIN,PRECTOTCORR,RH2M,ALLSKY_SFC_SW_DWN,GWETROOT",
+        "parameters": "T2M,T2M_RANGE,T2M_MAX,T2M_MIN,PRECTOTCORR,RH2M,ALLSKY_SFC_SW_DWN,GWETROOT",
         "community": "AG",
         "latitude": lat,
         "longitude": lon,
@@ -91,8 +91,11 @@ def fetch_power_climatology(lat: float, lon: float) -> tuple[dict, str]:
         days = [calendar.monthrange(2023, m)[1] for m in range(1, 13)]
         out = {
             "t_mean": [p["T2M"][m] for m in MONTHS],
-            "t_max": [p["T2M_MAX"][m] for m in MONTHS],
-            "t_min": [p["T2M_MIN"][m] for m in MONTHS],
+            # Typical day: mean temperature +/- half the mean daily range. (POWER's
+            # climatology T2M_MAX / T2M_MIN are the month's record extremes.)
+            "t_max": [p["T2M"][m] + p["T2M_RANGE"][m] / 2 for m in MONTHS],
+            "t_min": [p["T2M"][m] - p["T2M_RANGE"][m] / 2 for m in MONTHS],
+            "t_max_record": [p["T2M_MAX"][m] for m in MONTHS],
             # PRECTOTCORR is mm/day -> convert to monthly totals
             "precip_mm": [p["PRECTOTCORR"][m] * d for m, d in zip(MONTHS, days)],
             "rh": [p["RH2M"][m] for m in MONTHS],
