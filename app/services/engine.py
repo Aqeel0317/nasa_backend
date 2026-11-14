@@ -205,7 +205,9 @@ def search_rotations(site: dict, weights: dict, years: int = 3, irrigation_mm: f
         sc = season_climate(site, s)
         pools[s] = [c for c in crops_for_season(s, allowed)
                     if crop_suitability(c, sc, site["soil"], irrigation_mm)["score"] >= min_suitability]
-        if allow_fallow or not pools[s]:
+        # With fewer than two crops a season cannot rotate (the same crop may not follow
+        # itself), so the field is allowed to rest instead of returning no plan at all.
+        if allow_fallow or len(pools[s]) < 2:
             pools[s].append(FALLOW)
 
     beams: list[list[Crop]] = [[]]
