@@ -34,9 +34,13 @@ def season_climate(site: dict, season: str, future: bool = False) -> dict:
     months = detect_seasons(clim["t_mean"])[season]
     dt = site["future"]["delta_t"] if future else 0.0
     dp = 1 + (site["future"]["delta_p_pct"] / 100 if future else 0.0)
+    # Heat: the hottest three months in a row of the season (typical daily maxima).
+    # One edge month, such as October before wheat is sown, should not decide it.
+    tmax = [clim["t_max"][m] for m in months]
+    peak = max(float(np.mean(tmax[k:k + 3])) for k in range(max(1, len(tmax) - 2)))
     return {
         "t_mean": float(np.mean([clim["t_mean"][m] for m in months]) + dt),
-        "t_max": float(np.max([clim["t_max"][m] for m in months]) + dt),
+        "t_max": peak + dt,
         "rain_mm": float(np.sum([clim["precip_mm"][m] for m in months]) * dp),
         "wetness": float(np.mean([clim["root_wetness"][m] for m in months])),
     }

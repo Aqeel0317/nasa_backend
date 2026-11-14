@@ -202,7 +202,7 @@ def fetch_soilgrids(lat: float, lon: float) -> tuple[dict, str]:
     params += [("depth", d) for d in DEPTHS]
     try:
         # SoilGrids is often slow; give up quickly and use typical values instead.
-        js = _get(SOILGRIDS, params=params, timeout=12)
+        js = _get(SOILGRIDS, params=params, timeout=25)
         out = {}
         for layer in js["properties"]["layers"]:
             factor = layer["unit_measure"].get("d_factor", 1) or 1
