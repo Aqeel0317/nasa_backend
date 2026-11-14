@@ -74,3 +74,15 @@ def test_live_feed_shape():
     assert {"weather", "events", "fetched_at"} <= set(data)
     assert isinstance(data["weather"]["days"], list)
     assert isinstance(data["events"], list)
+
+
+def test_farm_current_season():
+    # The running season works (observed + forecast + normals, or normals when offline).
+    import datetime as dt
+    today = dt.date.today()
+    year = today.year if today.month >= 5 else today.year - 1
+    r = client.post("/api/farm/simulate", json={"year": year, "fields": [{"kharif": "cotton", "rabi": "wheat"}]})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert len(data["dates"]) in (365, 366)
+    assert "timeline" in data["weather"]

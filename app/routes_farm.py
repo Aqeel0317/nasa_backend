@@ -78,7 +78,8 @@ def farm_crops() -> list[dict]:
 
 @router.post("/simulate")
 def simulate(req: FarmRequest) -> dict:
-    key = json.dumps(req.model_dump(exclude={"fields": {"__all__": {"acres", "name"}}}), sort_keys=True)
+    # the running season changes every day (new observations, new forecast)
+    key = json.dumps(req.model_dump(exclude={"fields": {"__all__": {"acres", "name"}}}), sort_keys=True) + dt.date.today().isoformat()
     if key in _RESULTS:
         return _RESULTS[key]
     out = _simulate(req)
@@ -88,9 +89,8 @@ def simulate(req: FarmRequest) -> dict:
 
 
 def _simulate(req: FarmRequest) -> dict:
-    last_full = dt.date.today() - dt.timedelta(days=10)
-    if dt.date(req.year + 1, 4, 30) > last_full:
-        raise HTTPException(422, f"Farm year {req.year} is not complete yet; choose {last_full.year - 2} or earlier.")
+    if dt.date(req.year, 5, 1) > dt.date.today():
+        raise HTTPException(422, f"Farm year {req.year} has not started yet (it starts on 1 May {req.year}).")
 
     # Soil and weather come from two services; fetch them at the same time.
     with ThreadPoolExecutor(2) as pool:
@@ -152,7 +152,7 @@ def _simulate(req: FarmRequest) -> dict:
     return {
         "dates": [d.isoformat() for d in weather["dates"]],
         "weather": {
-            "source": weather["source"], "observed": weather["observed"],
+            "source": weather["source"], "observed": weather["observed"], "timeline": weather.get("timeline"),
             "scenario": {"tmax": _arr(scen_w["tmax"], 1), "rain": _arr(scen_w["rain"], 1)},
             "baseline": {"tmax": _arr(base_w["tmax"], 1), "rain": _arr(base_w["rain"], 1)},
         },

@@ -8,6 +8,7 @@ which needs only temperature and latitude.
 """
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 import logging
 import math
@@ -99,19 +100,114 @@ def _synthetic(lat, lon, dates) -> tuple[dict, str]:
 
 
 def get_farm_weather(lat: float, lon: float, year: int) -> dict:
-    """Daily weather + ET0 for 1 May `year` to 30 April `year+1`."""
-    key = (round(lat, 3), round(lon, 3), year)
+    """Daily weather + ET0 for 1 May `year` to 30 April `year+1`.
+
+    A finished farm year is NASA POWER observations throughout. The season that is
+    still running is built in three layers (see _current_season): NASA observations up
+    to the latest published day, the Open-Meteo forecast for the next 16 days, then
+    NASA long-term daily normals for the rest of the season."""
+    today = dt.date.today()
+    dates = farm_year_dates(year)
+    running = dates[-1] >= today - dt.timedelta(days=7)
+    key = (round(lat, 3), round(lon, 3), year, today.isoformat() if running else "")
     if key in _CACHE:
         return _CACHE[key]
-    dates = farm_year_dates(year)
-    try:
-        w, source, observed = _from_power(lat, lon, dates), "NASA POWER daily (observed)", True
-    except Exception as e:  # noqa: BLE001
-        log.warning("farm weather fallback: %s", e)
-        (w, source), observed = _synthetic(lat, lon, dates), False
+    if running:
+        w, source, observed, timeline = _current_season(lat, lon, dates, today)
+    else:
+        timeline = {"observed_until": dates[-1].isoformat(), "forecast_until": None}
+        try:
+            w, source, observed = _from_power(lat, lon, dates), "NASA POWER daily (observed)", True
+        except Exception as e:  # noqa: BLE001
+            log.warning("farm weather fallback: %s", e)
+            (w, source), observed = _synthetic(lat, lon, dates), False
+            timeline = {"observed_until": None, "forecast_until": None}
     doy = np.array([d.timetuple().tm_yday for d in dates])
     w["et0"] = hargreaves_et0(w["tmax"], w["tmin"], lat, doy)
-    w.update(dates=dates, source=source, observed=observed)
+    w.update(dates=dates, source=source, observed=observed, timeline=timeline)
     if observed:
         _CACHE[key] = w
     return w
+
+
+OPEN_METEO_FORECAST = "https://api.open-meteo.com/v1/forecast"
+
+
+def _power_partial(lat, lon, start: dt.date, end: dt.date) -> dict:
+    """NASA POWER daily values for start..end; days not yet published are NaN."""
+    js = _get(f"{POWER_BASE}/daily/point", {
+        "parameters": "T2M_MAX,T2M_MIN,PRECTOTCORR", "community": "AG",
+        "latitude": lat, "longitude": lon, "format": "JSON",
+        "start": start.strftime("%Y%m%d"), "end": end.strftime("%Y%m%d"),
+    }, ttl=6 * 3600)
+    p = js["properties"]["parameter"]
+    out = {}
+    for name, key in (("tmax", "T2M_MAX"), ("tmin", "T2M_MIN"), ("rain", "PRECTOTCORR")):
+        out[name] = {k: (np.nan if v is None or v <= -998 else float(v)) for k, v in p[key].items()}
+    return out
+
+
+def _forecast_days(lat, lon) -> dict:
+    """Open-Meteo daily forecast (16 days ahead, plus the last 10 days so NASA's
+    publishing delay is covered). {date: (tmax, tmin, rain)}"""
+    js = _get(OPEN_METEO_FORECAST, {
+        "latitude": lat, "longitude": lon, "timezone": "auto", "past_days": 10, "forecast_days": 16,
+        "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
+    }, ttl=3 * 3600, timeout=20)
+    d = js["daily"]
+    return {dt.date.fromisoformat(t): (a, b, c) for t, a, b, c in zip(
+        d["time"], d["temperature_2m_max"], d["temperature_2m_min"], d["precipitation_sum"]) if a is not None and b is not None}
+
+
+def _normals(lat, lon, dates) -> dict:
+    """Typical weather for each day: NASA POWER monthly climate normals, smoothly
+    interpolated to days (rain spread over the month)."""
+    clim, _ = fetch_power_climatology(lat, lon)
+    doy = np.array([d.timetuple().tm_yday for d in dates])
+    mid = np.array([15 + 30.4 * i for i in range(12)])
+    def daily(vals):
+        return np.interp(doy, np.r_[mid - 365, mid, mid + 365], np.r_[vals, vals, vals])
+    days_in = np.array([calendar.monthrange(d.year, d.month)[1] for d in dates])
+    rain_month = np.array([clim["precip_mm"][d.month - 1] for d in dates])
+    return {"tmax": daily(clim["t_max"]), "tmin": daily(clim["t_min"]), "rain": rain_month / days_in}
+
+
+def _current_season(lat, lon, dates, today):
+    n = len(dates)
+    normal = _normals(lat, lon, dates)
+    tmax, tmin, rain = normal["tmax"].copy(), normal["tmin"].copy(), normal["rain"].copy()
+    observed_until = forecast_until = None
+    parts = []
+    # 1. NASA POWER observations up to the latest published day
+    try:
+        obs = _power_partial(lat, lon, dates[0], min(today - dt.timedelta(days=1), dates[-1]))
+        for i, d in enumerate(dates):
+            k = d.strftime("%Y%m%d")
+            vals = (obs["tmax"].get(k, np.nan), obs["tmin"].get(k, np.nan), obs["rain"].get(k, np.nan))
+            if d >= today or any(np.isnan(v) for v in vals):
+                continue
+            tmax[i], tmin[i], rain[i] = vals[0], vals[1], max(0.0, vals[2])
+            observed_until = d
+        if observed_until:
+            parts.append(f"NASA POWER observed to {observed_until.isoformat()}")
+    except Exception as e:  # noqa: BLE001
+        log.warning("season: NASA POWER unavailable: %s", e)
+    # 2. Forecast for the days after the last observation (and the next 16 days)
+    try:
+        fc = _forecast_days(lat, lon)
+        start = observed_until or (dates[0] - dt.timedelta(days=1))
+        for i, d in enumerate(dates):
+            if d > start and d in fc:
+                tmax[i], tmin[i], rain[i] = fc[d][0], fc[d][1], max(0.0, fc[d][2] or 0.0)
+                forecast_until = d
+        if forecast_until:
+            parts.append(f"Open-Meteo forecast to {forecast_until.isoformat()}")
+    except Exception as e:  # noqa: BLE001
+        log.warning("season: forecast unavailable: %s", e)
+    parts.append("then NASA POWER climate normals")
+    tmin = np.minimum(tmin, tmax - 1)
+    w = {"tmax": np.asarray(tmax, float), "tmin": np.asarray(tmin, float), "rain": np.asarray(rain, float)}
+    timeline = {"observed_until": observed_until.isoformat() if observed_until else None,
+                "forecast_until": forecast_until.isoformat() if forecast_until else None,
+                "today": today.isoformat()}
+    return w, "; ".join(parts), observed_until is not None, timeline
