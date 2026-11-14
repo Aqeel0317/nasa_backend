@@ -97,8 +97,11 @@ def build_plans(site: dict, weights: dict, years: int, irrigation_mm: float, all
     # 2. one plan per strategy, skipping near-duplicates of plans already chosen
     chosen: list[tuple[str, object]] = []
     for key, dim, _en, _ur in STRATEGIES:
-        ranked = sorted(pool, key=(lambda r: _blend(r)) if dim is None else (lambda r, d=dim: (r.scores[d], _blend(r))),
-                        reverse=True)
+        if key == "water":   # least water = least irrigation actually needed (mm), not the share covered
+            ranked = sorted(pool, key=lambda r: (r.trajectory["irrigation_mm"], -_blend(r)))
+        else:
+            ranked = sorted(pool, key=(lambda r: _blend(r)) if dim is None else (lambda r, d=dim: (r.scores[d], _blend(r))),
+                            reverse=True)
         pick = next((r for r in ranked if all(not _similar(r.sequence, c.sequence) for _, c in chosen)), None)
         if pick is not None:
             chosen.append((key, pick))
