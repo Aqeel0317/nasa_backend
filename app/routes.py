@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query
 from .schemas import CropOut, RotationOut, RotationRequest, RotationResponse, SuitabilityRow
 from .services import data_sources as ds
 from .services import engine as en
+from .services import plans
 from .services.crops import CROPS
 
 router = APIRouter(prefix="/api")
@@ -48,14 +49,17 @@ def recommend(req: RotationRequest) -> RotationResponse:
     site["texture"] = en.texture_class(site["soil"])
 
     allowed = req.allowed_crops or None
-    results = en.search_rotations(site, req.weights.as_engine(), req.years, req.irrigation_mm,
-                                  allowed, req.allow_fallow, req.start_season, top_k=req.top_k)
+    chosen, cur = plans.build_plans(site, req.weights.as_engine(), req.years, req.irrigation_mm,
+                                    allowed, req.allow_fallow, req.start_season, req.top_k, req.current_rotation)
     suit = [SuitabilityRow(crop=r["crop"], season=r["season"], role=r["role"],
                            now=r["now"], future=r["2041-2050"])
             for r in en.suitability_table(site, req.irrigation_mm, allowed)]
-    rotations = [RotationOut(rank=i + 1, sequence=r.sequence, seasons=r.seasons,
-                             scores=r.scores, total=r.total, future_total=r.future_total,
-                             robustness=r.robustness, trajectory=r.trajectory,
-                             explanations=r.explanations)
-                 for i, r in enumerate(results)]
-    return RotationResponse(site=site, suitability=suit, rotations=rotations)
+    def out(r, rank, strategy=None, current=False):
+        return RotationOut(rank=rank, sequence=r.sequence, seasons=r.seasons,
+                           scores=r.scores, total=r.total, future_total=r.future_total,
+                           robustness=r.robustness, trajectory=r.trajectory,
+                           explanations=r.explanations, strategy=strategy, current=current,
+                           report=plans.plan_report(r, site, req.irrigation_mm, strategy, cur, is_current=current))
+    rotations = [out(r, i + 1, key) for i, (key, r) in enumerate(chosen)]
+    current = out(cur, 0, None, True) if cur is not None else None
+    return RotationResponse(site=site, suitability=suit, rotations=rotations, current=current, links=plans.LINKS)

@@ -89,6 +89,10 @@ def simulate_plot(crop: CropParams, weather: dict, year: int, soil_class: str,
     cc, biomass, excess, irrigated = 0.03, 0.0, 0.0, 0.0
     ks_flower, heat_flower = [], []
     stress_days = heat_days = waterlog_days = 0
+    # Waterlogging harms the crop, not just slows it: roots run short of air, leaves
+    # yellow and some yield is lost for good. Worst around flowering. Each day costs a
+    # share of the final yield (a quarter of that for crops that tolerate wet soil).
+    wl_damage = 0.0
     zr = 0.15
     taw = 1000 * (fc - wp) * zr
     dr = 0.3 * taw                       # start at 30 % depletion
@@ -133,6 +137,10 @@ def simulate_plot(crop: CropParams, weather: dict, year: int, soil_class: str,
         is_waterlogged = excess > 30 and not crop.flooded
         waterlog[t] = is_waterlogged
         wl = 0.55 if (is_waterlogged and not crop.waterlog_tolerant) else 1.0
+        if is_waterlogged and st >= 1:
+            per_day = 0.045 if flower_from <= das < flower_to else 0.02
+            wl_damage += per_day * (0.25 if crop.waterlog_tolerant else 1.0)
+            cc -= 0.01 * cc * (0.3 if crop.waterlog_tolerant else 1.0)      # yellowing
 
         # --- canopy ------------------------------------------------------------
         cc_pot = _cc_potential(crop, das)
@@ -170,7 +178,7 @@ def simulate_plot(crop: CropParams, weather: dict, year: int, soil_class: str,
         out["ndvi"][t] = 0.12 + 0.78 * cc
         out["height"][t] = min(1.0, das / (i_len + d_len + 10)) * (0.4 + 0.6 * cc / crop.cc_max)
         hi_now = _harvest_index(crop, ks_flower, heat_flower)
-        out["yield_est"][t] = hi_now * biomass / 100 * crop.fresh_factor * YIELD_SCALE.get(crop.key, 1.0)
+        out["yield_est"][t] = hi_now * biomass / 100 * crop.fresh_factor * YIELD_SCALE.get(crop.key, 1.0) * max(0.3, 1 - wl_damage)
 
     final_yield = float(np.nanmax(out["yield_est"])) if np.isfinite(out["yield_est"]).any() else 0.0
     return {

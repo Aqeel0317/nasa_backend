@@ -120,11 +120,23 @@ def _simulate(req: FarmRequest) -> dict:
     # yardstick ("you get 60% of what this crop can produce here").
     best = simulate_farm(base_w, req.year, soil_class, "full", keys)
     # The same farm under every disaster, for the "what could hit you" comparison.
-    shocks = {}
+    # A disaster test never shows a windfall: heavy rain also brings waterlogging,
+    # lodging, leached fertiliser and disease that the daily model does not fully
+    # capture, so its yield is capped at the normal year's (likewise every shock).
+    def capped(res, k):
+        return round(min(res[k]["summary"]["yield_t_ha"], base[k]["summary"]["yield_t_ha"]), 2)
+
+    shocks, shock_info = {}, {}
     for name in SHOCKS:
         res = scen if name == req.scenario else simulate_farm(
             apply_scenario(weather, name), req.year, soil_class, req.irrigation, keys)
-        shocks[name] = {k: res[k]["summary"]["yield_t_ha"] for k in keys}
+        shocks[name] = {k: capped(res, k) for k in keys}
+        shock_info[name] = {k: {"waterlog_days": res[k]["summary"]["waterlog_days"],
+                                "water_stress_days": res[k]["summary"]["water_stress_days"],
+                                "heat_days": res[k]["summary"]["heat_days"]} for k in keys}
+    if req.scenario in SHOCKS:      # the scenario on screen obeys the same rule
+        for k in keys:
+            scen[k]["summary"] = {**scen[k]["summary"], "yield_t_ha": shocks[req.scenario][k]}
 
     plots = []
     for key in keys:
@@ -162,6 +174,7 @@ def _simulate(req: FarmRequest) -> dict:
         "fields": [f.model_dump() for f in req.fields],
         "plots": plots,
         "shocks": shocks,
+        "shock_info": shock_info,
     }
 
 

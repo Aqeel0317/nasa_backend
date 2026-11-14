@@ -44,11 +44,15 @@ DISK_TTL = int(os.getenv("DISK_CACHE_SECONDS", str(30 * 86400)))
 
 
 def _get(url: str, params: Any = None, headers: dict | None = None, ttl: int | None = None,
-         timeout: float | None = None) -> Any:
+         timeout: float | None = None, per_day: bool = False) -> Any:
     """GET JSON, served from the disk cache when a fresh copy exists.
-    Past weather and soil do not change, so the default lifetime is long."""
+    Past weather and soil do not change, so the default lifetime is long.
+    per_day: data that changes daily (forecast, latest observations) is fetched once per
+    day and shared by every server worker, so the same request gives the same answer
+    all day instead of changing whenever a worker happens to refresh it."""
     ttl = DISK_TTL if ttl is None else ttl
-    key = hashlib.sha1(json.dumps([url, params], sort_keys=True, default=str).encode()).hexdigest()
+    tag = [dt.date.today().isoformat()] if per_day else []
+    key = hashlib.sha1(json.dumps([url, params, *tag], sort_keys=True, default=str).encode()).hexdigest()
     path = CACHE_DIR / f"{key}.json"
     if ttl > 0:
         try:

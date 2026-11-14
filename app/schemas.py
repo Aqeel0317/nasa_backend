@@ -34,6 +34,9 @@ class RotationRequest(BaseModel):
     allow_fallow: bool = False
     soil_override: SoilOverride | None = None
     top_k: int = Field(5, ge=1, le=10)
+    # The farmer's rotation today, e.g. ["Cotton", "Wheat"] (summer crop, winter crop):
+    # scored by the same model and shown first, so every plan is compared with it.
+    current_rotation: list[str] | None = Field(None, max_length=2)
 
 
 class CropOut(BaseModel):
@@ -63,9 +66,14 @@ class RotationOut(BaseModel):
     robustness: float
     trajectory: dict
     explanations: list[str]
+    strategy: str | None = None     # overall | income | soil | water | climate
+    current: bool = False           # the farmer's own rotation
+    report: dict | None = None      # why / evidence / benefits / gaps / risks (en + ur)
 
 
 class RotationResponse(BaseModel):
     site: dict
     suitability: list[SuitabilityRow]
     rotations: list[RotationOut]
+    current: RotationOut | None = None
+    links: dict = {}

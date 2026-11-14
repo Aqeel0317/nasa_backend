@@ -82,7 +82,7 @@ def _synthetic(lat, lon, dates) -> tuple[dict, str]:
         clim, _ = fetch_power_climatology(lat, lon)
         normals = {"t_max": clim["t_max"], "t_min": clim["t_min"], "rain": clim["precip_mm"]}
         label = "synthetic demo weather (from climate normals)"
-    rng = np.random.default_rng(abs(hash((round(lat, 2), round(lon, 2), dates[0].year))) % 2**32)
+    rng = np.random.default_rng(zlib.crc32(f"{round(lat, 2)},{round(lon, 2)},{dates[0].year}".encode()))
     # interpolate monthly normals to days (normals sit mid-month)
     doy = np.array([d.timetuple().tm_yday for d in dates])
     mid = np.array([15 + 30.4 * i for i in range(12)])
@@ -140,7 +140,7 @@ def _power_partial(lat, lon, start: dt.date, end: dt.date) -> dict:
         "parameters": "T2M_MAX,T2M_MIN,PRECTOTCORR", "community": "AG",
         "latitude": lat, "longitude": lon, "format": "JSON",
         "start": start.strftime("%Y%m%d"), "end": end.strftime("%Y%m%d"),
-    }, ttl=6 * 3600)
+    }, ttl=26 * 3600, per_day=True)
     p = js["properties"]["parameter"]
     out = {}
     for name, key in (("tmax", "T2M_MAX"), ("tmin", "T2M_MIN"), ("rain", "PRECTOTCORR")):
@@ -154,7 +154,7 @@ def _forecast_days(lat, lon) -> dict:
     js = _get(OPEN_METEO_FORECAST, {
         "latitude": lat, "longitude": lon, "timezone": "auto", "past_days": 10, "forecast_days": 16,
         "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
-    }, ttl=3 * 3600, timeout=20)
+    }, ttl=26 * 3600, timeout=20, per_day=True)
     d = js["daily"]
     return {dt.date.fromisoformat(t): (a, b, c) for t, a, b, c in zip(
         d["time"], d["temperature_2m_max"], d["temperature_2m_min"], d["precipitation_sum"]) if a is not None and b is not None}

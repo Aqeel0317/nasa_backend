@@ -86,3 +86,45 @@ def test_farm_current_season():
     data = r.json()
     assert len(data["dates"]) in (365, 366)
     assert "timeline" in data["weather"]
+
+
+# ---- regression: identical inputs give identical numbers; disasters never pay -------
+FARM_A = {"lat": 31.42, "lon": 73.08, "year": 2024, "scenario": "normal", "irrigation": "rainfed",
+          "fields": [{"kharif": "cotton", "rabi": "wheat", "acres": 5}]}
+
+
+def test_same_inputs_same_numbers():
+    a = client.post("/api/farm/simulate", json=FARM_A).json()
+    b = client.post("/api/farm/simulate", json=FARM_A).json()
+    assert a["shocks"] == b["shocks"]
+    assert [p["baseline"]["summary"] for p in a["plots"]] == [p["baseline"]["summary"] for p in b["plots"]]
+
+
+def test_heavy_rain_is_never_a_windfall():
+    for irrigation in ("rainfed", "deficit", "full"):
+        body = {**FARM_A, "irrigation": irrigation, "scenario": "flood"}
+        js = client.post("/api/farm/simulate", json=body).json()
+        for p in js["plots"]:
+            normal = p["baseline"]["summary"]["yield_t_ha"]
+            assert js["shocks"]["flood"][p["crop"]] <= normal + 1e-9
+            assert p["scenario"]["summary"]["yield_t_ha"] <= normal + 1e-9
+        assert "shock_info" in js and "waterlog_days" in js["shock_info"]["flood"]["cotton"]
+
+
+def test_plans_include_current_rotation_and_differ():
+    body = {"lat": 31.42, "lon": 73.08, "years": 3, "irrigation_mm": 0,
+            "weights": {"soil_health": 9, "water_saving": 10, "climate_resilience": 7, "profit": 4},
+            "current_rotation": ["Cotton", "Wheat"]}
+    js = client.post("/api/rotations", json=body).json()
+    assert js["current"]["current"] is True
+    assert js["current"]["sequence"][:2] == ["Cotton", "Wheat"]
+    plans = js["rotations"]
+    assert len(plans) >= 3
+    # genuinely different strategies: no two plans share half their seasons
+    for i, a in enumerate(plans):
+        for b in plans[i + 1:]:
+            same = sum(x == y for x, y in zip(a["sequence"], b["sequence"])) / len(a["sequence"])
+            assert same < 0.5
+    for p in plans + [js["current"]]:
+        assert set(p["report"]) == {"why", "evidence", "benefits", "gaps", "risks"}
+        assert all(item["en"] and item["ur"] for block in p["report"].values() for item in block)
