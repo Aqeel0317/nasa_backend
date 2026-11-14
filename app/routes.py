@@ -53,17 +53,26 @@ def recommend(req: RotationRequest) -> RotationResponse:
     site["texture"] = en.texture_class(site["soil"])
 
     allowed = req.allowed_crops or None
-    chosen, cur = plans.build_plans(site, req.weights.as_engine(), req.years, req.irrigation_mm,
+    # Farmer's situation -> model inputs
+    irrigation_mm = req.irrigation_mm
+    if "laser_leveller" in req.equipment:
+        irrigation_mm *= 1.25        # laser-levelled fields need ~20% less water for the same crop
+    if "tubewell" in req.equipment:
+        irrigation_mm += 100         # can water at critical stages even when the canal is off
+    site["value_boost"] = plans.MARKET_BOOST.get(req.market or "", {})
+    site["farmer"] = {"market": req.market, "equipment": list(req.equipment), "farm_acres": req.farm_acres,
+                      "irrigation_mm_effective": round(irrigation_mm)}
+    chosen, cur = plans.build_plans(site, req.weights.as_engine(), req.years, irrigation_mm,
                                     allowed, req.allow_fallow, req.start_season, req.top_k, req.current_rotation)
     suit = [SuitabilityRow(crop=r["crop"], season=r["season"], role=r["role"],
                            now=r["now"], future=r["2041-2050"])
-            for r in en.suitability_table(site, req.irrigation_mm, allowed)]
+            for r in en.suitability_table(site, irrigation_mm, allowed)]
     def out(r, rank, strategy=None, current=False):
         return RotationOut(rank=rank, sequence=r.sequence, seasons=r.seasons,
                            scores=r.scores, total=r.total, future_total=r.future_total,
                            robustness=r.robustness, trajectory=r.trajectory,
                            explanations=r.explanations, strategy=strategy, current=current,
-                           report=plans.plan_report(r, site, req.irrigation_mm, strategy, cur, is_current=current))
+                           report=plans.plan_report(r, site, irrigation_mm, strategy, cur, is_current=current))
     rotations = [out(r, i + 1, key) for i, (key, r) in enumerate(chosen)]
     current = out(cur, 0, None, True) if cur is not None else None
     return RotationResponse(site=site, suitability=suit, rotations=rotations, current=current, links=plans.LINKS)

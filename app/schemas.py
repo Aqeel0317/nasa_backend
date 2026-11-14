@@ -37,6 +37,11 @@ class RotationRequest(BaseModel):
     # The farmer's rotation today, e.g. ["Cotton", "Wheat"] (summer crop, winter crop):
     # scored by the same model and shown first, so every plan is compared with it.
     current_rotation: list[str] | None = Field(None, max_length=2)
+    # The farmer's situation (all optional): how they sell, what equipment they have,
+    # farm size. Used in scoring and in each plan's explanation.
+    market: Literal["mandi", "home", "contract"] | None = None
+    equipment: list[Literal["tractor", "laser_leveller", "tubewell"]] = []
+    farm_acres: float | None = Field(None, gt=0, le=5000)
 
 
 class CropOut(BaseModel):

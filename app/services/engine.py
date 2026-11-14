@@ -177,7 +177,9 @@ def simulate(seq: list[Crop], seasons: list[str], site: dict,
     water_eff = 1 - irrigation_total / max(need_total, 1)
     resilience = float(np.mean(suit)) * (0.7 + 0.3 * np.mean(
         [(c.drought_tol + c.heat_tol) / 2 for c in seq]))
-    profit = float(np.mean([c.value * s for c, s in zip(seq, suit)])) / 0.85
+    # how the farmer sells changes what each crop is worth to them (site["value_boost"])
+    boost = site.get("value_boost") or {}
+    profit = float(np.mean([min(1.0, c.value * boost.get(c.name, 1.0)) * s for c, s in zip(seq, suit)])) / 0.85
 
     return {
         "scores": {"Soil health": float(soil_health), "Water saving": float(water_eff),

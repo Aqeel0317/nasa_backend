@@ -37,6 +37,14 @@ LINKS = {
 COMMON = [("Cotton", "Wheat"), ("Rice", "Wheat"), ("Maize", "Wheat"), ("Mung bean", "Wheat"),
           ("Maize", "Potato"), ("Sorghum", "Berseem clover"), ("Guar", "Chickpea"), ("Cotton", "Chickpea")]
 
+# How the farmer sells: crops that fit that market are worth more to them.
+MARKET_BOOST = {
+    "mandi": {"Wheat": 1.1, "Rice": 1.1, "Cotton": 1.1, "Maize": 1.05, "Potato": 1.05},
+    "home": {"Berseem clover": 1.6, "Sorghum": 1.4, "Oats (cover)": 1.6, "Maize": 1.15, "Wheat": 1.1, "Mung bean": 1.1, "Chickpea": 1.1},
+    "contract": {"Cotton": 1.15, "Potato": 1.2, "Maize": 1.15, "Sunflower": 1.2, "Mustard / canola": 1.15},
+}
+HEAVY_TILLAGE = {"Potato", "Rice"}      # need a tractor (or hiring one) for land preparation
+
 STRATEGIES = [
     # key, how it is ranked, label en, label ur
     ("overall", None, "Best overall for your priorities", "آپ کی ترجیحات کے لیے سب سے بہتر"),
@@ -249,11 +257,34 @@ def plan_report(r, site: dict, irrigation_mm: float, strategy: str | None, curre
             risks.append(_t(note + ".", "ایک ہی خاندان کی فصل دوبارہ: کیڑوں کا خطرہ بڑھتا ہے۔"))
         if "bare-fallow" in note:
             risks.append(_t(note + ".", "خالی زمین کے سیزن مٹی کو کھلا چھوڑتے ہیں؛ کور فصل لگائیں۔"))
+    gaps = []
+    farmer = site.get("farmer") or {}
+    eq = set(farmer.get("equipment") or [])
+    if "tractor" not in eq:
+        for name in sorted(HEAVY_TILLAGE & set(r.sequence)):
+            risks.append(_t(f"{name} needs deep tillage or puddling: without your own tractor, budget for hiring one on time.",
+                            f"{name} کے لیے گہری ہل چلانی ضروری ہے: اپنا ٹریکٹر نہیں تو وقت پر کرائے کا انتظام کریں۔"))
+    if "laser_leveller" in eq:
+        why.append(_t("Your laser-levelled land saves about 20% of irrigation water, so water-hungry crops are easier here.",
+                      "آپ کی لیزر سے ہموار زمین تقریباً 20% پانی بچاتی ہے، اس لیے زیادہ پانی والی فصلیں آسان ہیں۔"))
+    if "tubewell" in eq:
+        why.append(_t("With your own tubewell you can water at flowering even when the canal turn is late.",
+                      "اپنے ٹیوب ویل سے آپ نہری باری دیر سے ہو تب بھی پھول آنے پر پانی دے سکتے ہیں۔"))
+    mk = farmer.get("market")
+    if mk:
+        names = {"mandi": ("selling at the mandi", "منڈی میں فروخت"), "home": ("home use and livestock feed", "گھر اور مویشیوں کا چارہ"),
+                 "contract": ("contract or mill buyers", "کنٹریکٹ یا مل کے خریدار")}[mk]
+        fits = sorted(set(r.sequence) & set(MARKET_BOOST[mk]))
+        if fits:
+            benefits.append(_t(f"Fits how you sell ({names[0]}): {', '.join(fits)}.",
+                               f"آپ کے بیچنے کے طریقے ({names[1]}) کے مطابق: {'، '.join(fits)}۔"))
+    if farmer.get("farm_acres"):
+        gaps.append(_t(f"Scores are per acre; on your {farmer['farm_acres']:g} acres, labour and cash needs grow with the area.",
+                       f"اسکور فی ایکڑ ہیں؛ آپ کے {farmer['farm_acres']:g} ایکڑ پر مزدوری اور خرچ رقبے کے ساتھ بڑھتے ہیں۔"))
     risks.append(_t("Check seed, local prices and buyers with your agriculture officer before changing crops.",
                     "فصل بدلنے سے پہلے بیج، مقامی قیمت اور خریدار اپنے زرعی افسر سے پوچھیں۔"))
 
     # ---- gaps: what the model does not know
-    gaps = []
     for label, value in src.items():
         if "fallback" in str(value) or "demo" in str(value):
             gaps.append(_t(f"{label}: the live data service did not answer, so typical values were used.",
