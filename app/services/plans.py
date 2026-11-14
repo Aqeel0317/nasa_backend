@@ -99,6 +99,13 @@ def build_plans(site: dict, weights: dict, years: int, irrigation_mm: float, all
             seen.add(tuple(names))
             pool.append(_evaluate(names, seasons, site, weights, irrigation_mm))
 
+    # the farmer's own rotation is shown separately, never as an "alternative"
+    if current:
+        own = [n if n in CROPS else "Fallow" for n in current][:2]
+        own = (own + ["Fallow"])[:2]
+        own_seq = list(own if start_season == "warm" else own[::-1]) * years
+        pool = [r for r in pool if r.sequence != own_seq]
+
     # 2. one plan per strategy, skipping near-duplicates of plans already chosen
     chosen: list[tuple[str, object]] = []
     for key, dim, _en, _ur in STRATEGIES:

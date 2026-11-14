@@ -81,7 +81,7 @@ def recommend(req: RotationRequest) -> RotationResponse:
                            explanations=r.explanations, strategy=strategy, current=current,
                            report=plans.plan_report(r, site, irrigation_mm, strategy, cur, is_current=current))
     def label(key, r):
-        if key == "income" and cur is not None and r.scores["Profit"] < cur.scores["Profit"]:
+        if key == "income" and cur is not None and r.scores["Profit"] <= cur.scores["Profit"]:
             return "income_alt"     # the best-earning new option, but the farmer's own earns more
         return key
     rotations = [out(r, i + 1, label(key, r)) for i, (key, r) in enumerate(chosen)]
