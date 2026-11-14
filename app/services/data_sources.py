@@ -197,12 +197,11 @@ DEPTHS = {"0-5cm": 5, "5-15cm": 10, "15-30cm": 15}
 def fetch_soilgrids(lat: float, lon: float) -> tuple[dict, str]:
     """Returns depth-weighted 0-30 cm means in conventional units.
     clay/sand/silt %, soc g/kg, ph, nitrogen g/kg, cec cmol/kg, bdod g/cm3."""
-    params = [("lon", lon), ("lat", lat), ("value", "mean")]
-    params += [("property", p) for p in SOIL_PROPS]
-    params += [("depth", d) for d in DEPTHS]
-    try:
-        # SoilGrids is often slow; give up quickly and use typical values instead.
-        js = _get(SOILGRIDS, params=params, timeout=25)
+    def query(la: float, lo: float) -> dict:
+        params = [("lon", round(lo, 4)), ("lat", round(la, 4)), ("value", "mean")]
+        params += [("property", p) for p in SOIL_PROPS]
+        params += [("depth", d) for d in DEPTHS]
+        js = _get(SOILGRIDS, params=params, timeout=25)   # SoilGrids is slow; success is cached
         out = {}
         for layer in js["properties"]["layers"]:
             factor = layer["unit_measure"].get("d_factor", 1) or 1
@@ -214,13 +213,25 @@ def fetch_soilgrids(lat: float, lon: float) -> tuple[dict, str]:
                     wts.append(DEPTHS[d["label"]])
             if vals:
                 out[layer["name"]] = float(np.average(vals, weights=wts))
-        if len(out) < 4:
-            raise ValueError("SoilGrids returned no data (water/urban pixel?)")
-        return out, "ISRIC SoilGrids 250 m"
-    except Exception as e:  # noqa: BLE001
-        log.warning("SoilGrids fallback: %s", e)
-        return {"clay": 25.0, "sand": 40.0, "silt": 35.0, "soc": 8.0,
-                "phh2o": 7.2, "nitrogen": 0.9, "cec": 15.0, "bdod": 1.4}, "fallback (demo values)"
+        return out
+
+    # A district picked from the list is its town centre, which SoilGrids maps as
+    # "no soil" (city or water). Then try farmland a few km away.
+    tries = [(0, 0), (0.04, 0), (-0.04, 0), (0, 0.04), (0, -0.04)]
+    last = None
+    for dla, dlo in tries:
+        try:
+            out = query(lat + dla, lon + dlo)
+            if len(out) >= 4:
+                return out, "ISRIC SoilGrids 250 m" + ("" if (dla, dlo) == (0, 0) else " (nearest farmland)")
+            last = ValueError("SoilGrids returned no data (water/urban pixel)")
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if "timed out" in str(e).lower() or "timeout" in type(e).__name__.lower():
+                break                      # the service is down: don't wait five times
+    log.warning("SoilGrids fallback: %s", last)
+    return {"clay": 25.0, "sand": 40.0, "silt": 35.0, "soc": 8.0,
+            "phh2o": 7.2, "nitrogen": 0.9, "cec": 15.0, "bdod": 1.4}, "fallback (demo values)"
 
 
 # --------------------------------------------------------------------------
@@ -241,15 +252,18 @@ def fetch_modis_ndvi(lat: float, lon: float, n_dates: int = 46) -> tuple[dict, s
             js = _get(f"{ORNL}/MOD13Q1/subset", {
                 "latitude": lat, "longitude": lon, "band": "250m_16_days_NDVI",
                 "startDate": chunk[0]["modis_date"], "endDate": chunk[-1]["modis_date"],
-                "kmAboveBelow": 0, "kmLeftRight": 0,
-            }, hdr)
+                # A 4 x 4 km box (17 x 17 pixels) around the point, not one pixel: a
+                # district picked from the list is its town centre, and a single pixel
+                # there is roofs and roads. The greener quarter of the box is the farmland.
+                "kmAboveBelow": 2, "kmLeftRight": 2,
+            }, hdr, timeout=30)
             for s in js["subset"]:
-                v = s["data"][0]
-                if v > -2000:  # -3000 = fill
-                    series.append((s["calendar_date"], v * 0.0001))
+                px = np.array([v for v in s["data"] if v > -2000], float)   # -3000 = fill
+                if px.size:
+                    series.append((s["calendar_date"], float(np.percentile(px, 75)) * 0.0001))
         if not series:
             raise ValueError("no NDVI values")
-        return summarize_ndvi(series), "NASA MODIS MOD13Q1 (ORNL DAAC)"
+        return summarize_ndvi(series), "NASA MODIS MOD13Q1 (ORNL DAAC), 4 km around the field"
     except Exception as e:  # noqa: BLE001
         log.warning("MODIS fallback: %s", e)
         t = np.arange(46)
