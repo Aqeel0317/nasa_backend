@@ -110,7 +110,7 @@ TYPICAL_T_HA = {"wheat": 3.5, "cotton": 2.2, "rice": 4.0, "maize": 6.5, "barley"
                 "sorghum": 1.5, "pearl_millet": 1.5, "mung_bean": 1.0, "soybean": 1.5,
                 "guar": 1.0, "sunflower": 2.0, "mustard": 1.3, "chickpea": 1.2, "lentil": 0.9,
                 "potato": 25.0, "oats": 10.0, "berseem": 12.0, "sesbania": 6.0}
-_MODEL_POTENTIAL_T_HA = {"wheat": 4.46, "cotton": 5.43, "rice": 6.01, "maize": 12.69, "barley": 5.52,
+_MODEL_POTENTIAL_T_HA = {"wheat": 6.6, "cotton": 5.43, "rice": 6.01, "maize": 12.69, "barley": 5.52,
                          "sorghum": 7.74, "pearl_millet": 3.92, "mung_bean": 1.98, "soybean": 4.24,
                          "guar": 2.65, "sunflower": 3.65, "mustard": 3.74, "chickpea": 5.18, "lentil": 4.29,
                          "potato": 31.65, "oats": 14.73, "berseem": 19.32, "sesbania": 5.74}
