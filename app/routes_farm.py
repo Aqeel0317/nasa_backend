@@ -11,7 +11,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .services.data_sources import POWER_BASE, _get, fetch_soilgrids
+from .services.data_sources import POWER_BASE, _get, fetch_smap_rootzone, fetch_soilgrids
 from .simulation.crop_registry import CROPS
 from .simulation.engine import IRRIGATION, insights, simulate_farm, texture_class
 from .simulation.scenarios import apply_scenario
@@ -238,8 +238,13 @@ def live(lat: float = 31.42, lon: float = 73.08) -> dict:
     if key in _LIVE:
         return _LIVE[key]
     out: dict = {"lat": lat, "lon": lon, "fetched_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"}
-    with ThreadPoolExecutor(2) as pool:
+    with ThreadPoolExecutor(3) as pool:
         w, e = pool.submit(_live_weather, lat, lon), pool.submit(_live_events, lat, lon)
+        sm = pool.submit(fetch_smap_rootzone, lat, lon)
+        try:
+            out["smap"] = sm.result()
+        except Exception:  # noqa: BLE001
+            out["smap"] = None
         try:
             out["weather"] = w.result()
         except Exception as ex:  # noqa: BLE001

@@ -29,6 +29,7 @@ LINKS = {
     "Open-Meteo CMIP6": "https://open-meteo.com/en/docs/climate-api",
     "Open-Meteo forecast": "https://open-meteo.com/en/docs",
     "NASA EONET": "https://eonet.gsfc.nasa.gov/",
+    "NASA SMAP L4": "https://nsidc.org/data/spl4smgp",
 }
 
 # Rotations Punjab farmers actually grow: always considered, so the comparison
@@ -179,6 +180,12 @@ def plan_report(r, site: dict, irrigation_mm: float, strategy: str | None, curre
             f"Satellite greenness (NDVI): about {ndvi.get('crop_cycles_per_year', 0):g} crops a year here, land bare {ndvi.get('bare_soil_fraction', 0) * 100:.0f}% of the time.",
             f"سیٹلائٹ سبزہ (NDVI): یہاں سال میں تقریباً {ndvi.get('crop_cycles_per_year', 0):g} فصلیں، زمین {ndvi.get('bare_soil_fraction', 0) * 100:.0f}% وقت خالی۔",
             src.get("Vegetation history", "NASA MODIS"), LINKS["NASA MODIS NDVI (GIBS)"], f"{series[0][0]} to {series[-1][0]}"))
+    smap = site.get("smap")
+    if smap:
+        evidence.append(_t(
+            f"Root-zone soil moisture now: {smap['value']:.2f} m³/m³ (how much water the top metre of soil holds).",
+            f"اس وقت جڑوں کی مٹی کی نمی: {smap['value']:.2f} m³/m³ (اوپر کے ایک میٹر میں کتنا پانی ہے)۔",
+            "NASA SMAP L4", smap.get("url"), smap.get("date")))
     evidence.append(_t(
         f"Soil: organic carbon {soil.get('soc', 0):.1f} g/kg, pH {soil.get('phh2o', 0):.1f}, clay {soil.get('clay', 0):.0f}%.",
         f"مٹی: نامیاتی کاربن {soil.get('soc', 0):.1f} گرام/کلو، pH {soil.get('phh2o', 0):.1f}، چکنی مٹی {soil.get('clay', 0):.0f}%۔",

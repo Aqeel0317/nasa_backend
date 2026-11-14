@@ -46,6 +46,10 @@ def recommend(req: RotationRequest) -> RotationResponse:
             site["soil"].update(over)
             site["sources"]["Soil"] = "Farmer soil test + SoilGrids"
     site["seasons"] = en.detect_seasons(site["climate"]["t_mean"])
+    try:   # NASA SMAP root-zone soil moisture, latest day (evidence for every plan)
+        site["smap"] = ds.fetch_smap_rootzone(round(req.lat, 2), round(req.lon, 2))
+    except Exception:  # noqa: BLE001
+        site["smap"] = None
     site["texture"] = en.texture_class(site["soil"])
 
     allowed = req.allowed_crops or None

@@ -268,6 +268,66 @@ def _ndvi_colormap() -> dict:
     return _ndvi_colors
 
 
+_gibs_colormaps: dict = {}
+
+
+def _gibs_colormap(url: str) -> dict:
+    """Any GIBS colour table: {(r, g, b): value at the middle of its band}."""
+    if url not in _gibs_colormaps:
+        import re
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        cm = {}
+        for m in re.finditer(r'rgb="(\d+),(\d+),(\d+)" transparent="(\w+)"[^>]*?value="\[([-\d.eE]+),([-\d.eE]+)\)"', r.text):
+            if m.group(4) != "true":
+                cm[(int(m.group(1)), int(m.group(2)), int(m.group(3)))] = (float(m.group(5)) + float(m.group(6))) / 2
+        if len(cm) < 20:
+            raise ValueError("colour table not understood")
+        _gibs_colormaps[url] = cm
+    return _gibs_colormaps[url]
+
+
+SMAP_LAYER = "SMAP_L4_Analyzed_Root_Zone_Soil_Moisture"
+SMAP_COLORS = "https://gibs.earthdata.nasa.gov/colormaps/v1.0/SMAP_Analyzed_Soil_Moisture.xml"
+
+
+def fetch_smap_rootzone(lat: float, lon: float) -> dict | None:
+    """NASA SMAP L4 root-zone soil moisture (m3/m3, 0-100 cm, 9 km) for the latest day
+    available (usually 3-5 days ago), read from NASA GIBS. None if it cannot be read."""
+    colors = _gibs_colormap(SMAP_COLORS)
+    d = 0.1
+    for back in range(2, 9):
+        day = (dt.date.today() - dt.timedelta(days=back)).isoformat()
+        key = hashlib.sha1(f"smap|{lat:.2f}|{lon:.2f}|{day}".encode()).hexdigest()
+        path = CACHE_DIR / f"{key}.json"
+        try:
+            hit = json.loads(path.read_text("utf-8"))
+            if hit.get("v") is not None:
+                return {"value": hit["v"], "date": day, "source": "NASA SMAP L4 root-zone soil moisture (via NASA GIBS)",
+                        "url": "https://nsidc.org/data/spl4smgp"}
+            continue
+        except (OSError, ValueError):
+            pass
+        r = requests.get(GIBS_WMS, params={
+            "SERVICE": "WMS", "REQUEST": "GetMap", "VERSION": "1.3.0", "LAYERS": SMAP_LAYER,
+            "CRS": "EPSG:4326", "BBOX": f"{lat - d},{lon - d},{lat + d},{lon + d}",
+            "WIDTH": 8, "HEIGHT": 8, "FORMAT": "image/png", "TIME": day,
+        }, timeout=20)
+        if r.status_code != 200 or not r.content.startswith(b"\x89PNG"):
+            continue
+        vals = [colors[p[:3]] for p in _png_pixels(r.content) if p[3] > 0 and p[:3] in colors]
+        v = round(float(np.mean(vals)), 3) if len(vals) >= 4 else None
+        try:
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"v": v}), "utf-8")
+        except OSError:
+            pass
+        if v is not None:
+            return {"value": v, "date": day, "source": "NASA SMAP L4 root-zone soil moisture (via NASA GIBS)",
+                    "url": "https://nsidc.org/data/spl4smgp"}
+    return None
+
+
 def _png_pixels(buf: bytes) -> list[tuple[int, int, int, int]]:
     """Minimal PNG reader (8-bit RGB, RGBA or palette), standard library only."""
     import struct
