@@ -160,21 +160,65 @@ def _forecast_days(lat, lon) -> dict:
 
 
 def _normals(lat, lon, dates) -> dict:
-    """Typical weather for each day: NASA POWER monthly climate normals, smoothly
-    interpolated to days (rain spread over the month)."""
+    """Typical weather for each calendar day: the mean of the last 10 years of NASA
+    POWER daily observations at this point, smoothed over about two weeks.
+    (NASA's monthly climatology T2M_MAX/T2M_MIN are the month's extremes, not a
+    typical day, so they are not used here.)"""
+    today = dt.date.today()
+    start, end = dt.date(today.year - 10, 1, 1), dt.date(today.year - 1, 12, 31)
+    js = _get(f"{POWER_BASE}/daily/point", {
+        "parameters": "T2M_MAX,T2M_MIN,PRECTOTCORR", "community": "AG",
+        "latitude": lat, "longitude": lon, "format": "JSON",
+        "start": start.strftime("%Y%m%d"), "end": end.strftime("%Y%m%d"),
+    }, timeout=90)
+    p = js["properties"]["parameter"]
+    sums = {k: np.zeros(366) for k in ("tmax", "tmin", "rain")}
+    counts = np.zeros(366)
+    for key, tmax in p["T2M_MAX"].items():
+        tmin, rain = p["T2M_MIN"].get(key, -999), p["PRECTOTCORR"].get(key, -999)
+        if min(tmax, tmin, rain) <= -998:
+            continue
+        d = dt.date(int(key[:4]), int(key[4:6]), int(key[6:]))
+        i = (d - dt.date(d.year, 1, 1)).days if not (d.month == 2 and d.day == 29) else 58
+        if d.month > 2 and calendar.isleap(d.year):
+            i -= 1                     # keep 1 March on the same index in leap years
+        sums["tmax"][i] += tmax; sums["tmin"][i] += tmin; sums["rain"][i] += max(0.0, rain); counts[i] += 1
+    counts[365] = 0
+    ok = counts[:365] > 0
+    if ok.sum() < 300:
+        raise ValueError("not enough NASA POWER history for normals")
+    kernel = np.ones(15) / 15
+    out = {}
+    for k in sums:
+        mean = np.where(ok, sums[k][:365] / np.maximum(counts[:365], 1), np.nan)
+        mean = np.interp(np.arange(365), np.flatnonzero(ok), mean[ok])
+        smooth = np.convolve(np.r_[mean[-7:], mean, mean[:7]], kernel, mode="valid")   # circular
+        out[k] = smooth
+    idx = np.array([min(364, (d - dt.date(d.year, 1, 1)).days - (1 if d.month > 2 and calendar.isleap(d.year) else 0)) for d in dates])
+    return {k: out[k][idx] for k in out}
+
+
+def _normals_fallback(lat, lon, dates) -> dict:
+    """Used only if the daily history is unavailable: monthly mean temperature with a
+    typical day-night spread, and monthly rain spread over the month."""
     clim, _ = fetch_power_climatology(lat, lon)
     doy = np.array([d.timetuple().tm_yday for d in dates])
     mid = np.array([15 + 30.4 * i for i in range(12)])
     def daily(vals):
         return np.interp(doy, np.r_[mid - 365, mid, mid + 365], np.r_[vals, vals, vals])
+    tmean = daily(clim["t_mean"])
     days_in = np.array([calendar.monthrange(d.year, d.month)[1] for d in dates])
     rain_month = np.array([clim["precip_mm"][d.month - 1] for d in dates])
-    return {"tmax": daily(clim["t_max"]), "tmin": daily(clim["t_min"]), "rain": rain_month / days_in}
+    return {"tmax": tmean + 6.5, "tmin": tmean - 6.5, "rain": rain_month / days_in}
 
 
 def _current_season(lat, lon, dates, today):
     n = len(dates)
-    normal = _normals(lat, lon, dates)
+    try:
+        normal, normal_src = _normals(lat, lon, dates), "NASA POWER 10-year daily normals"
+    except Exception as e:  # noqa: BLE001
+        log.warning("season: daily normals unavailable, using climatology: %s", e)
+        normal, normal_src = _normals_fallback(lat, lon, dates), "NASA POWER climate normals"
     tmax, tmin, rain = normal["tmax"].copy(), normal["tmin"].copy(), normal["rain"].copy()
     observed_until = forecast_until = None
     parts = []
@@ -204,7 +248,7 @@ def _current_season(lat, lon, dates, today):
             parts.append(f"Open-Meteo forecast to {forecast_until.isoformat()}")
     except Exception as e:  # noqa: BLE001
         log.warning("season: forecast unavailable: %s", e)
-    parts.append("then NASA POWER climate normals")
+    parts.append(f"then {normal_src}")
     tmin = np.minimum(tmin, tmax - 1)
     w = {"tmax": np.asarray(tmax, float), "tmin": np.asarray(tmin, float), "rain": np.asarray(rain, float)}
     timeline = {"observed_until": observed_until.isoformat() if observed_until else None,
