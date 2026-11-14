@@ -4,7 +4,7 @@ data_sources.py - every external API call lives here.
 APIs used (all free; only earthaccess needs a free NASA Earthdata Login):
   1. NASA POWER (Agroclimatology)  - climate normals + 10-yr daily history
   2. ISRIC SoilGrids v2.0          - soil texture, organic carbon, pH, N, CEC
-  3. NASA MODIS via ORNL DAAC      - NDVI history of the field (MOD13Q1, 250 m)
+  3. NASA MODIS NDVI via NASA GIBS (images), ORNL DAAC as backup - greenness history
   4. Open-Meteo Climate API        - CMIP6 HighResMIP projections to 2050
   5. NASA Earthdata via earthaccess (optional) - SMAP soil moisture, GPM IMERG
      rainfall, GRACE groundwater granules for advanced analysis
@@ -216,8 +216,9 @@ def fetch_soilgrids(lat: float, lon: float) -> tuple[dict, str]:
         return out
 
     # A district picked from the list is its town centre, which SoilGrids maps as
-    # "no soil" (city or water). Then try farmland a few km away.
-    tries = [(0, 0), (0.04, 0), (-0.04, 0), (0, 0.04), (0, -0.04)]
+    # "no soil" (city or water). Then try farmland just outside the town (SoilGrids
+    # allows about 5 requests a minute, so at most 5 points).
+    tries = [(0, 0), (0.1, 0), (-0.1, 0), (0, 0.12), (0, -0.12)]   # ~11 km: past a big town
     last = None
     for dla, dlo in tries:
         try:
@@ -240,8 +241,142 @@ def fetch_soilgrids(lat: float, lon: float) -> tuple[dict, str]:
 ORNL = "https://modis.ornl.gov/rst/api/v1"
 
 
+GIBS_WMS = "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi"
+GIBS_NDVI_LAYER = "MODIS_Terra_L3_NDVI_16Day"
+GIBS_NDVI_COLORS = "https://gibs.earthdata.nasa.gov/colormaps/v1.0/MODIS_L3_NDVI.xml"
+_ndvi_colors: dict | None = None
+
+
+def _ndvi_colormap() -> dict:
+    """NASA's published colour table for the NDVI images: each colour is one NDVI band."""
+    global _ndvi_colors
+    if _ndvi_colors is None:
+        import re
+        r = requests.get(GIBS_NDVI_COLORS, timeout=30)
+        r.raise_for_status()
+        cm = {}
+        for m in re.finditer(r'rgb="(\d+),(\d+),(\d+)" transparent="(\w+)" value="\[([-\d.]+),([-\d.]+)\)"', r.text):
+            if m.group(4) != "true":
+                cm[(int(m.group(1)), int(m.group(2)), int(m.group(3)))] = (float(m.group(5)) + float(m.group(6))) / 2
+        if len(cm) < 50:
+            raise ValueError("NDVI colour table not understood")
+        _ndvi_colors = cm
+    return _ndvi_colors
+
+
+def _png_pixels(buf: bytes) -> list[tuple[int, int, int, int]]:
+    """Minimal PNG reader (8-bit RGB, RGBA or palette), standard library only."""
+    import struct
+    import zlib
+    if buf[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG")
+    pos, idat, plte, trns, w = 8, [], b"", b"", 0
+    while pos < len(buf):
+        (n,) = struct.unpack(">I", buf[pos:pos + 4])
+        kind, data = buf[pos + 4:pos + 8], buf[pos + 8:pos + 8 + n]
+        pos += 12 + n
+        if kind == b"IHDR":
+            w, h, depth, ctype = struct.unpack(">IIBB", data[:10])
+        elif kind == b"PLTE":
+            plte = data
+        elif kind == b"tRNS":
+            trns = data
+        elif kind == b"IDAT":
+            idat.append(data)
+    if depth != 8 or ctype not in (2, 3, 6):
+        raise ValueError(f"unsupported PNG type {ctype}/{depth}")
+    bpp = {2: 3, 3: 1, 6: 4}[ctype]
+    raw, stride = zlib.decompress(b"".join(idat)), w * bpp
+    prev, rows = bytearray(stride), []
+    for y in range(h):
+        f, line = raw[y * (stride + 1)], raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)]
+        cur = bytearray(stride)
+        for x in range(stride):
+            a = cur[x - bpp] if x >= bpp else 0
+            b = prev[x]
+            c = prev[x - bpp] if x >= bpp else 0
+            v = line[x]
+            if f == 1:
+                v += a
+            elif f == 2:
+                v += b
+            elif f == 3:
+                v += (a + b) >> 1
+            elif f == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                v += a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+            cur[x] = v & 0xFF
+        rows.append(cur)
+        prev = cur
+    out = []
+    for row in rows:
+        for i in range(w):
+            if ctype == 3:
+                k = row[i]
+                out.append((plte[3 * k], plte[3 * k + 1], plte[3 * k + 2], trns[k] if k < len(trns) else 255))
+            else:
+                p = row[i * bpp:(i + 1) * bpp]
+                out.append((p[0], p[1], p[2], p[3] if bpp == 4 else 255))
+    return out
+
+
+def _gibs_ndvi_on(lat: float, lon: float, day: str) -> float | None:
+    """NDVI of the farmland around a point on one 16-day composite: a 22 x 22 km box,
+    read from NASA's MODIS NDVI image, and the greener quarter of its pixels (the
+    fields, not the town). Cached on disk, since a past composite never changes."""
+    key = hashlib.sha1(f"gibs-ndvi|{lat:.3f}|{lon:.3f}|{day}".encode()).hexdigest()
+    path = CACHE_DIR / f"{key}.json"
+    try:
+        return json.loads(path.read_text("utf-8"))["v"]
+    except (OSError, ValueError, KeyError):
+        pass
+    d = 0.1
+    r = requests.get(GIBS_WMS, params={
+        "SERVICE": "WMS", "REQUEST": "GetMap", "VERSION": "1.3.0", "LAYERS": GIBS_NDVI_LAYER,
+        "CRS": "EPSG:4326", "BBOX": f"{lat - d},{lon - d},{lat + d},{lon + d}",
+        "WIDTH": 40, "HEIGHT": 40, "FORMAT": "image/png", "TIME": day,
+    }, timeout=25)
+    r.raise_for_status()
+    colors = _ndvi_colormap()
+    vals = [colors[p[:3]] for p in _png_pixels(r.content) if p[3] > 0 and p[:3] in colors]
+    v = float(np.percentile(vals, 75)) if len(vals) >= 40 else None
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"v": v}), "utf-8")
+    except OSError:
+        pass
+    return v
+
+
+def _gibs_ndvi_series(lat: float, lon: float, n_dates: int = 46) -> list[tuple[str, float]]:
+    """About two years of 16-day NDVI from NASA GIBS (fast, served from a CDN)."""
+    today = dt.date.today()
+    days = [dt.date(y, 1, 1) + dt.timedelta(days=16 * k) for y in range(today.year - 2, today.year + 1) for k in range(23)]
+    days = [d for d in days if d <= today - dt.timedelta(days=24)][-n_dates:]   # composites appear ~3 weeks late
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        got = list(pool.map(lambda d: _safe(_gibs_ndvi_on, lat, lon, d.isoformat()), days))
+    series = [(d.isoformat(), v) for d, v in zip(days, got) if v is not None]
+    if len(series) < 20:
+        raise ValueError(f"only {len(series)} NDVI images")
+    return series
+
+
+def _safe(fn, *args):
+    try:
+        return fn(*args)
+    except Exception as e:  # noqa: BLE001
+        log.info("NDVI image skipped: %s", e)
+        return None
+
+
 def fetch_modis_ndvi(lat: float, lon: float, n_dates: int = 46) -> tuple[dict, str]:
-    """~2 years of 16-day NDVI at 250 m. API allows max 10 dates per request."""
+    """~2 years of 16-day MODIS NDVI around the field. First NASA GIBS (images, fast and
+    reliable), then the ORNL DAAC point service, then demo values."""
+    try:
+        return summarize_ndvi(_gibs_ndvi_series(lat, lon, n_dates)), "NASA MODIS NDVI 16-day (NASA GIBS), farmland around the field"
+    except Exception as e:  # noqa: BLE001
+        log.warning("GIBS NDVI unavailable, trying ORNL: %s", e)
     hdr = {"Accept": "application/json"}
     try:
         dates = _get(f"{ORNL}/MOD13Q1/dates", {"latitude": lat, "longitude": lon}, hdr)["dates"]
@@ -256,7 +391,7 @@ def fetch_modis_ndvi(lat: float, lon: float, n_dates: int = 46) -> tuple[dict, s
                 # district picked from the list is its town centre, and a single pixel
                 # there is roofs and roads. The greener quarter of the box is the farmland.
                 "kmAboveBelow": 2, "kmLeftRight": 2,
-            }, hdr, timeout=30)
+            }, hdr, timeout=20)
             for s in js["subset"]:
                 px = np.array([v for v in s["data"] if v > -2000], float)   # -3000 = fill
                 if px.size:
