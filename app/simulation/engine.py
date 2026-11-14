@@ -220,7 +220,9 @@ def insights(crop_key: str, base: dict, scen: dict) -> list[dict]:
     notes.append({"code": "yield_change", "params": {"pct": round(change)}})
     if s["flowering_water_factor"] < 0.8:
         notes.append({"code": "flower_water", "params": {"pct": round(100 * (1 - s["flowering_water_factor"]))}})
-    if s["flowering_heat"] > 0.05:
+    # heat at flowering is only explained when this scenario adds heat, or in a normal
+    # year (s is b); a heavy-rain test does not cite heat it did not cause
+    if s["flowering_heat"] > 0.05 and (s == b or s["flowering_heat"] - b["flowering_heat"] > 0.03):
         notes.append({"code": "flower_heat", "params": {"pct": round(100 * s["flowering_heat"])}})
     if s["waterlog_days"] > 2:
         notes.append({"code": "waterlog", "params": {"days": s["waterlog_days"]}})

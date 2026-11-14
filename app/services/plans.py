@@ -43,7 +43,12 @@ MARKET_BOOST = {
     "home": {"Berseem clover": 1.6, "Sorghum": 1.4, "Oats (cover)": 1.6, "Maize": 1.15, "Wheat": 1.1, "Mung bean": 1.1, "Chickpea": 1.1},
     "contract": {"Cotton": 1.15, "Potato": 1.2, "Maize": 1.15, "Sunflower": 1.2, "Mustard / canola": 1.15},
 }
-HEAVY_TILLAGE = {"Potato", "Rice"}      # need a tractor (or hiring one) for land preparation
+HEAVY_TILLAGE = {"Potato", "Rice"}
+# Reference prices behind the crop-value index (Rs per 40 kg maund, 2025); a farmer's
+# own mandi price scales a crop's value by price / reference.
+REF_PRICE = {"Cotton": 8500, "Rice": 3800, "Maize": 2600, "Sorghum": 2600, "Pearl millet": 2800, "Mung bean": 9000,
+             "Soybean": 6500, "Guar": 8000, "Sunflower": 6500, "Wheat": 3500, "Barley": 2800, "Oats (cover)": 900,
+             "Mustard / canola": 7000, "Chickpea": 9500, "Lentil": 11000, "Berseem clover": 900, "Potato": 1600}      # need a tractor (or hiring one) for land preparation
 
 STRATEGIES = [
     # key, how it is ranked, label en, label ur
@@ -169,8 +174,12 @@ def plan_report(r, site: dict, irrigation_mm: float, strategy: str | None, curre
         why.append(_t("This is the rotation you grow now, scored by the same model so you can compare.",
                       "یہ وہ فصلی چکر ہے جو آپ ابھی اگاتے ہیں، اسی ماڈل سے جانچا گیا تاکہ آپ موازنہ کر سکیں۔"))
     else:
-        label = next((s for s in STRATEGIES if s[0] == strategy), STRATEGIES[0])
-        why.append(_t(f"Chosen as: {label[2]}.", f"اس لیے چنا گیا: {label[3]}۔"))
+        if strategy == "income_alt":
+            why.append(_t("Chosen as the best-earning new option. Your current rotation still earns more on income alone.",
+                          "نئے آپشنز میں سب سے زیادہ کمائی والا۔ صرف آمدنی دیکھیں تو آپ کا موجودہ چکر اب بھی زیادہ کماتا ہے۔"))
+        else:
+            label = next((s for s in STRATEGIES if s[0] == strategy), STRATEGIES[0])
+            why.append(_t(f"Chosen as: {label[2]}.", f"اس لیے چنا گیا: {label[3]}۔"))
         best_dim = max(r.scores, key=r.scores.get)
         names = {"Soil health": ("soil health", "مٹی کی صحت"), "Water saving": ("water saving", "پانی کی بچت"),
                  "Climate resilience": ("climate resilience", "موسمی مضبوطی"), "Profit": ("income", "آمدنی")}
@@ -295,8 +304,13 @@ def plan_report(r, site: dict, irrigation_mm: float, strategy: str | None, curre
     if "Farmer soil test" not in str(src.get("Soil", "")):
         gaps.append(_t("Soil comes from a 250 m soil map, not a test of your own field. A soil test would make this more accurate.",
                        "مٹی کا ڈیٹا 250 میٹر کے نقشے سے ہے، آپ کے کھیت کے ٹیسٹ سے نہیں۔ مٹی کا ٹیسٹ اسے زیادہ درست بنائے گا۔"))
-    gaps.append(_t("Income uses a crop-value index, not today's mandi prices or your buyers.",
-                   "آمدنی فصل کی قدر کے اشاریے سے ہے، آج کی منڈی قیمت یا آپ کے خریداروں سے نہیں۔"))
+    own = sorted((farmer.get("prices") or {}).keys())
+    if own:
+        gaps.append(_t(f"Income uses your mandi prices for {', '.join(own)}; other crops use typical 2025 prices.",
+                       f"آمدنی میں {'، '.join(own)} کے لیے آپ کی منڈی قیمتیں؛ باقی فصلوں کے لیے 2025 کی عام قیمتیں۔"))
+    else:
+        gaps.append(_t("Income uses typical 2025 mandi prices, not your own. Add your prices in the planner for a closer answer.",
+                       "آمدنی 2025 کی عام منڈی قیمتوں سے ہے، آپ کی اپنی نہیں۔ زیادہ درست جواب کے لیے منصوبہ ساز میں اپنی قیمتیں لکھیں۔"))
     gaps.append(_t(f"Future climate comes from one climate model ({fut.get('model', 'CMIP6')}); others may differ.",
                    f"مستقبل کا موسم ایک ماڈل ({fut.get('model', 'CMIP6')}) سے ہے؛ دوسرے ماڈل مختلف ہو سکتے ہیں۔"))
     gaps.append(_t("A simplified seasonal model: it compares options, it does not predict your exact harvest.",

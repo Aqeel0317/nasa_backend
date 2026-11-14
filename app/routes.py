@@ -59,13 +59,20 @@ def recommend(req: RotationRequest) -> RotationResponse:
         irrigation_mm *= 1.25        # laser-levelled fields need ~20% less water for the same crop
     if "tubewell" in req.equipment:
         irrigation_mm += 100         # can water at critical stages even when the canal is off
-    site["value_boost"] = plans.MARKET_BOOST.get(req.market or "", {})
+    boost = dict(plans.MARKET_BOOST.get(req.market or "", {}))
+    prices = {k: v for k, v in (req.prices or {}).items() if k in plans.REF_PRICE and v and v > 0}
+    for name, price in prices.items():      # the farmer's own mandi price
+        boost[name] = boost.get(name, 1.0) * price / plans.REF_PRICE[name]
+    site["value_boost"] = boost
     site["farmer"] = {"market": req.market, "equipment": list(req.equipment), "farm_acres": req.farm_acres,
-                      "irrigation_mm_effective": round(irrigation_mm)}
+                      "irrigation_mm_effective": round(irrigation_mm), "prices": prices}
     chosen, cur = plans.build_plans(site, req.weights.as_engine(), req.years, irrigation_mm,
                                     allowed, req.allow_fallow, req.start_season, req.top_k, req.current_rotation)
     suit = [SuitabilityRow(crop=r["crop"], season=r["season"], role=r["role"],
-                           now=r["now"], future=r["2041-2050"])
+                           now=r["now"], future=r["2041-2050"],
+                           hot_days_now=r.get("hot_days_now"), hot_days_future=r.get("hot_days_future"),
+                           water_mm_now=r.get("water_mm_now"), water_mm_future=r.get("water_mm_future"),
+                           heat_limit_c=r.get("heat_limit_c"))
             for r in en.suitability_table(site, irrigation_mm, allowed)]
     def out(r, rank, strategy=None, current=False):
         return RotationOut(rank=rank, sequence=r.sequence, seasons=r.seasons,
@@ -73,6 +80,11 @@ def recommend(req: RotationRequest) -> RotationResponse:
                            robustness=r.robustness, trajectory=r.trajectory,
                            explanations=r.explanations, strategy=strategy, current=current,
                            report=plans.plan_report(r, site, irrigation_mm, strategy, cur, is_current=current))
-    rotations = [out(r, i + 1, key) for i, (key, r) in enumerate(chosen)]
+    def label(key, r):
+        if key == "income" and cur is not None and r.scores["Profit"] < cur.scores["Profit"]:
+            return "income_alt"     # the best-earning new option, but the farmer's own earns more
+        return key
+    rotations = [out(r, i + 1, label(key, r)) for i, (key, r) in enumerate(chosen)]
     current = out(cur, 0, None, True) if cur is not None else None
-    return RotationResponse(site=site, suitability=suit, rotations=rotations, current=current, links=plans.LINKS)
+    site_out = {**site, "extremes": {k: v for k, v in (site.get("extremes") or {}).items() if k != "hot_day_table"}}
+    return RotationResponse(site=site_out, suitability=suit, rotations=rotations, current=current, links=plans.LINKS)

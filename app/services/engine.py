@@ -101,11 +101,29 @@ def suitability_table(site: dict, irrigation_mm: float, allowed=None) -> list[di
     rows = []
     for season in ("warm", "cool"):
         now, fut = season_climate(site, season), season_climate(site, season, future=True)
+        months = detect_seasons(site["climate"]["t_mean"])[season]
+        dt_future = site["future"]["delta_t"]
+        table = (site.get("extremes") or {}).get("hot_day_table") or {}
+
+        def hot_days(limit: float, warming: float) -> float | None:
+            """Days a year in this crop's season above its heat limit (from NASA POWER
+            daily data); with warming, the same days are that much hotter."""
+            if not table:
+                return None
+            th = int(round(limit - warming))
+            th = min(48, max(24, th))
+            return round(sum(table.get(str(m + 1), {}).get(str(th), 0.0) for m in months), 0)
+
         for c in crops_for_season(season, allowed):
+            water_now = c.water_mm
+            water_future = round(c.water_mm * (1 + 0.03 * dt_future))   # ~3% more water per degree
             rows.append({
                 "crop": c.name, "season": season, "role": c.role,
                 "now": crop_suitability(c, now, site["soil"], irrigation_mm)["score"],
                 "2041-2050": crop_suitability(c, fut, site["soil"], irrigation_mm)["score"],
+                "hot_days_now": hot_days(c.t_max, 0.0),
+                "hot_days_future": hot_days(c.t_max, dt_future),
+                "water_mm_now": water_now, "water_mm_future": water_future, "heat_limit_c": c.t_max,
             })
     return rows
 

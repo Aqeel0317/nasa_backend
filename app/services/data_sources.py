@@ -172,6 +172,11 @@ def fetch_power_extremes(lat: float, lon: float, years: int = 10) -> tuple[dict,
             "annual_rain": annual_rain,
             "heat_days": heat_days,
         }
+        # days per year above each temperature, month by month (for per-crop hot days)
+        months = np.array([int(d[4:6]) for d in dates])
+        n_years = max(1, len(np.unique(yrs)))
+        out["hot_day_table"] = {str(m): {str(th): round(float(np.nansum(tmax[months == m] > th)) / n_years, 1)
+                                         for th in range(24, 49)} for m in range(1, 13)}
         return out, "NASA POWER daily"
     except Exception as e:  # noqa: BLE001
         log.warning("POWER daily fallback: %s", e)

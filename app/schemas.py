@@ -42,6 +42,8 @@ class RotationRequest(BaseModel):
     market: Literal["mandi", "home", "contract"] | None = None
     equipment: list[Literal["tractor", "laser_leveller", "tubewell"]] = []
     farm_acres: float | None = Field(None, gt=0, le=5000)
+    # The farmer's own mandi prices, rupees per 40 kg maund, by crop name (optional)
+    prices: dict[str, float] | None = None
 
 
 class CropOut(BaseModel):
@@ -59,6 +61,11 @@ class SuitabilityRow(BaseModel):
     role: str
     now: float
     future: float
+    hot_days_now: float | None = None
+    hot_days_future: float | None = None
+    water_mm_now: float | None = None
+    water_mm_future: float | None = None
+    heat_limit_c: float | None = None
 
 
 class RotationOut(BaseModel):
