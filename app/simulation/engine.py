@@ -21,7 +21,7 @@ import datetime as dt
 
 import numpy as np
 
-from .crop_registry import CROPS, STAGE_NAMES, CropParams
+from .crop_registry import CROPS, STAGE_NAMES, YIELD_SCALE, CropParams
 
 # Soil water at field capacity / wilting point (m3/m3) by texture class
 SOIL_WATER = {"light": (0.20, 0.08), "medium": (0.31, 0.15), "heavy": (0.40, 0.24)}
@@ -170,7 +170,7 @@ def simulate_plot(crop: CropParams, weather: dict, year: int, soil_class: str,
         out["ndvi"][t] = 0.12 + 0.78 * cc
         out["height"][t] = min(1.0, das / (i_len + d_len + 10)) * (0.4 + 0.6 * cc / crop.cc_max)
         hi_now = _harvest_index(crop, ks_flower, heat_flower)
-        out["yield_est"][t] = hi_now * biomass / 100 * crop.fresh_factor
+        out["yield_est"][t] = hi_now * biomass / 100 * crop.fresh_factor * YIELD_SCALE.get(crop.key, 1.0)
 
     final_yield = float(np.nanmax(out["yield_est"])) if np.isfinite(out["yield_est"]).any() else 0.0
     return {

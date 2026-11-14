@@ -97,3 +97,21 @@ _ALL = [
 CROPS: dict[str, CropParams] = {c.key: c for c in _ALL}
 
 STAGE_NAMES = ("initial", "development", "mid", "late")
+
+# Calibration: the simplified model over-predicts absolute yields, most of all for
+# pulses. Each crop's yield is scaled so that a normal season with full irrigation at
+# Faisalabad (2025-26 NASA POWER weather) gives a typical good Punjab yield, in t/ha:
+# wheat 3.5 (~35 maunds/acre), cotton 2.2, rice paddy 4.0, maize 6.5, barley 2.5,
+# sorghum 1.5, pearl millet 1.5, mung 1.0, soybean 1.5, guar 1.0, sunflower 2.0,
+# mustard 1.3, chickpea 1.2, lentil 0.9, potato 25, oats 10 and berseem 12 (dry
+# fodder), sesbania 6 (green manure). Other places keep the model's relative
+# differences, and weather effects (percent changes) are unchanged.
+TYPICAL_T_HA = {"wheat": 3.5, "cotton": 2.2, "rice": 4.0, "maize": 6.5, "barley": 2.5,
+                "sorghum": 1.5, "pearl_millet": 1.5, "mung_bean": 1.0, "soybean": 1.5,
+                "guar": 1.0, "sunflower": 2.0, "mustard": 1.3, "chickpea": 1.2, "lentil": 0.9,
+                "potato": 25.0, "oats": 10.0, "berseem": 12.0, "sesbania": 6.0}
+_MODEL_POTENTIAL_T_HA = {"wheat": 4.46, "cotton": 5.43, "rice": 6.01, "maize": 12.69, "barley": 5.52,
+                         "sorghum": 7.74, "pearl_millet": 3.92, "mung_bean": 1.98, "soybean": 4.24,
+                         "guar": 2.65, "sunflower": 3.65, "mustard": 3.74, "chickpea": 5.18, "lentil": 4.29,
+                         "potato": 31.65, "oats": 14.73, "berseem": 19.32, "sesbania": 5.74}
+YIELD_SCALE = {k: TYPICAL_T_HA[k] / _MODEL_POTENTIAL_T_HA[k] for k in TYPICAL_T_HA}
